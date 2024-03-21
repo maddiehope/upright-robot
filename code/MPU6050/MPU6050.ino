@@ -1,99 +1,165 @@
-// Basic demo for accelerometer readings from Adafruit MPU6050
+/********************************************************************
+ * 																	*
+ * 			Upright Robot with Arduino								*
+ * 																	*
+ * 	MPU6050 accelerometer/gyroscope combo	*			*
+ * 	Uses Kalman filter for sensor fusion							*
+ * 																	*
+ * ******************************************************************/
+// NOTES:
 
-// Make sure you chance 0x68 to 0x72 in the Adafruit_MPU6050.h file before running:
-// #define MPU6050_DEVICE_ID 0x72 -----> change it from 0x68 to 0x72
+// BEFORE RUNNING: Make sure you chance 0x68 to 0x72 in the Adafruit_MPU6050.h file 
+                // #define MPU6050_DEVICE_ID 0x72 -----> change it from 0x68 to 0x72
 
+// VIEWING OUTPUT: Notice that the serial is set to 115200 baud. 
+                // Make sure you set the monitor & plotter to this if you want to view!
+
+// ------------------------------------------------------------------------------------
 #include <Adafruit_MPU6050.h> 
 #include <Adafruit_Sensor.h>
 #include <Wire.h>
+#include <Kalman.h> // Source: https://github.com/TKJElectronics/KalmanFilter
 
-Adafruit_MPU6050 mpu;
+Adafruit_MPU6050 mpu; // Create the MPU6050 instance
+
+Kalman kalmanX; // Create the Kalman instances
+Kalman kalmanY;
+
+// Sensor Values ----------------------------------------------------------------------
+double accX, accY, accZ;
+double gyroX, gyroY, gyroZ;
+
+double gyroXangle, gyroYangle; // Angle calculate using the gyro only
+double compAngleX, compAngleY; // Calculated angle using a complementary filter
+double kalAngleX, kalAngleY; // Calculated angle using a Kalman filter
+
+uint32_t timer;
+// ------------------------------------------------------------------------------------
 
 void setup(void) {
-  Serial.begin(115200);
+  Serial.begin(115200); // SEE NOTE ABOVE: this is set to 115200!
   while (!Serial)
-    delay(10); // will pause Zero, Leonardo, etc until serial console opens
+    delay(10); // will pause everything until serial console opens
 
   Serial.println("Adafruit MPU6050 test!");
 
-  // Try to initialize!
+  // Trying to initialize the MPU6050 -------------------------------------------------
   if (!mpu.begin()) {
     Serial.println("Failed to find MPU6050 chip");
     while (1) {
       delay(10);
     }
   }
-  Serial.println("MPU6050 Found!");
+  Serial.println("MPU6050 Found!"); // This message indicated everything is connected correctly.
+  // ----------------------------------------------------------------------------------
+  // Setting up the MPU ranges:
+  mpu.setAccelerometerRange(MPU6050_RANGE_2_G); // options: 2G, 4G, 8G, 16G
+  mpu.setGyroRange(MPU6050_RANGE_250_DEG); // options (+/-): 250, 500, 1000, 2000
+  mpu.setFilterBandwidth(MPU6050_BAND_21_HZ); // options (Hz): 260, 184, 94, 44, 21, 10, 5
+  // ----------------------------------------------------------------------------------
 
-  mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
-  Serial.print("Accelerometer range set to: ");
-  switch (mpu.getAccelerometerRange()) {
-  case MPU6050_RANGE_2_G:
-    Serial.println("+-2G");
-    break;
-  case MPU6050_RANGE_4_G:
-    Serial.println("+-4G");
-    break;
-  case MPU6050_RANGE_8_G:
-    Serial.println("+-8G");
-    break;
-  case MPU6050_RANGE_16_G:
-    Serial.println("+-16G");
-    break;
-  }
-  mpu.setGyroRange(MPU6050_RANGE_500_DEG);
-  Serial.print("Gyro range set to: ");
-  switch (mpu.getGyroRange()) {
-  case MPU6050_RANGE_250_DEG:
-    Serial.println("+- 250 deg/s");
-    break;
-  case MPU6050_RANGE_500_DEG:
-    Serial.println("+- 500 deg/s");
-    break;
-  case MPU6050_RANGE_1000_DEG:
-    Serial.println("+- 1000 deg/s");
-    break;
-  case MPU6050_RANGE_2000_DEG:
-    Serial.println("+- 2000 deg/s");
-    break;
-  }
+  delay(100); // Wait for sensor to stabilize
 
-  mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
-  Serial.print("Filter bandwidth set to: ");
-  switch (mpu.getFilterBandwidth()) {
-  case MPU6050_BAND_260_HZ:
-    Serial.println("260 Hz");
-    break;
-  case MPU6050_BAND_184_HZ:
-    Serial.println("184 Hz");
-    break;
-  case MPU6050_BAND_94_HZ:
-    Serial.println("94 Hz");
-    break;
-  case MPU6050_BAND_44_HZ:
-    Serial.println("44 Hz");
-    break;
-  case MPU6050_BAND_21_HZ:
-    Serial.println("21 Hz");
-    break;
-  case MPU6050_BAND_10_HZ:
-    Serial.println("10 Hz");
-    break;
-  case MPU6050_BAND_5_HZ:
-    Serial.println("5 Hz");
-    break;
-  }
+  /* Set kalman and gyro starting angle */
+  sensors_event_t a, g, temp;
+  mpu.getEvent(&a, &g, &temp);
 
-  Serial.println("");
-  delay(100);
+  accX = a.acceleration.x;
+  accY = a.acceleration.y;
+  accZ = a.acceleration.z;
+
+  double roll  = atan(accY / sqrt(accX * accX + accZ * accZ)) * RAD_TO_DEG;
+  double pitch = atan2(-accX, accZ) * RAD_TO_DEG;
+
+  kalmanX.setAngle(roll); // Set starting angle
+  kalmanY.setAngle(pitch);
+  gyroXangle = roll;
+  gyroYangle = pitch;
+  compAngleX = roll;
+  compAngleY = pitch;
+
+  timer = micros();
 }
 
 void loop() {
+
   /* Get new sensor events with the readings */
   sensors_event_t a, g, temp;
   mpu.getEvent(&a, &g, &temp);
 
-  /* Print out the values */
+  accX = a.acceleration.x;
+  accY = a.acceleration.y;
+  accZ = a.acceleration.z;
+
+  gyroX = g.gyro.x;
+  gyroY = g.gyro.y;
+  gyroZ = g.gyro.z;
+
+  double dt = (double)(micros() - timer) / 1000000; // Calculate delta time
+  timer = micros();
+
+  double roll  = atan(accY / sqrt(accX * accX + accZ * accZ)) * RAD_TO_DEG;
+  double pitch = atan2(-accX, accZ) * RAD_TO_DEG;
+
+  double gyroXrate = gyroX / 131.0; // Convert to deg/s
+  double gyroYrate = gyroY / 131.0; // Convert to deg/s
+
+  // This fixes the transition problem when the accelerometer angle jumps between -180 and 180 degrees
+  if ((pitch < -90 && kalAngleY > 90) || (pitch > 90 && kalAngleY < -90)) {
+    kalmanY.setAngle(pitch);
+    compAngleY = pitch;
+    kalAngleY = pitch;
+    gyroYangle = pitch;
+  } else
+    kalAngleY = kalmanY.getAngle(pitch, gyroYrate, dt); // Calculate the angle using a Kalman filter
+
+  if (abs(kalAngleY) > 90)
+    gyroXrate = -gyroXrate; // Invert rate, so it fits the restriced accelerometer reading
+  kalAngleX = kalmanX.getAngle(roll, gyroXrate, dt); // Calculate the angle using a Kalman filter
+
+  gyroXangle += gyroXrate * dt; // Calculate gyro angle without any filter
+  gyroYangle += gyroYrate * dt;
+  //gyroXangle += kalmanX.getRate() * dt; // Calculate gyro angle using the unbiased rate
+  //gyroYangle += kalmanY.getRate() * dt;
+
+  compAngleX = 0.93 * (compAngleX + gyroXrate * dt) + 0.07 * roll; // Calculate the angle using a Complimentary filter
+  compAngleY = 0.93 * (compAngleY + gyroYrate * dt) + 0.07 * pitch;
+
+  // Reset the gyro angle when it has drifted too much
+  if (gyroXangle < -180 || gyroXangle > 180)
+    gyroXangle = kalAngleX;
+  if (gyroYangle < -180 || gyroYangle > 180)
+    gyroYangle = kalAngleY;
+
+
+   /* Print Data */
+  #if 0 // Set to 1 to activate
+    Serial.print(accX); Serial.print("\t");
+    Serial.print(accY); Serial.print("\t");
+    Serial.print(accZ); Serial.print("\t");
+
+    Serial.print(gyroX); Serial.print("\t");
+    Serial.print(gyroY); Serial.print("\t");
+    Serial.print(gyroZ); Serial.print("\t");
+
+    Serial.print("\t");
+  #endif
+
+    Serial.print(roll); Serial.print("\t");
+    Serial.print(gyroXangle); Serial.print("\t");
+    Serial.print(compAngleX); Serial.print("\t");
+    Serial.print(kalAngleX); Serial.print("\t");
+
+    Serial.print("\t");
+
+    Serial.print(pitch); Serial.print("\t");
+    Serial.print(gyroYangle); Serial.print("\t");
+    Serial.print(compAngleY); Serial.print("\t");
+    Serial.print(kalAngleY); Serial.print("\t");
+
+  /* PRINTING SENSOR VALUES TO SERIAL MONITOR */
+  /* Uncomment for testing */
+  /*
   //Serial.print("Acc_X: ");
   Serial.print(a.acceleration.x);
   Serial.print("\t");
@@ -116,7 +182,9 @@ void loop() {
   
   //Serial.print("Gyro_Z: ");
   Serial.println(g.gyro.z);
+  */
 
 
-  delay(100);
+  Serial.print("\r\n");
+  delay(2);
 }
