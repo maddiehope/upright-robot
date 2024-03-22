@@ -25,7 +25,20 @@ Adafruit_MPU6050 mpu; // Create the MPU6050 instance
 Kalman kalmanX; // Create the Kalman instances
 Kalman kalmanY;
 
+// Motor Pins --------------------------------------------------------------------------
+
+// Motor A connections
+int enA = 9;
+int in1 = 8;
+int in2 = 7;
+// Motor B connections
+int enB = 3;
+int in3 = 5;
+int in4 = 4;
+
+// ------------------------------------------------------------------------------------
 // Sensor Values ----------------------------------------------------------------------
+
 double accX, accY, accZ;
 double gyroX, gyroY, gyroZ;
 
@@ -33,10 +46,12 @@ double gyroXangle, gyroYangle; // Angle calculate using the gyro only
 double compAngleX, compAngleY; // Calculated angle using a complementary filter
 double kalAngleX, kalAngleY; // Calculated angle using a Kalman filter
 
-uint32_t timer;
 // ------------------------------------------------------------------------------------
 
+uint32_t timer;
+
 void setup(void) {
+
   Serial.begin(115200); // SEE NOTE ABOVE: this is set to 115200!
 
   while (!Serial)
@@ -44,6 +59,7 @@ void setup(void) {
 
   Serial.println("Adafruit MPU6050 test!");
 
+  // ----------------------------------------------------------------------------------
   // Trying to initialize the MPU6050 -------------------------------------------------
   if (!mpu.begin()) {
     Serial.println("Failed to find MPU6050 chip");
@@ -52,12 +68,14 @@ void setup(void) {
     }
   }
   Serial.println("MPU6050 Found!"); // This message indicated everything is connected correctly.
-  // ----------------------------------------------------------------------------------
+
   // Setting up the MPU ranges:
   mpu.setAccelerometerRange(MPU6050_RANGE_2_G); // options: 2G, 4G, 8G, 16G
   mpu.setGyroRange(MPU6050_RANGE_250_DEG); // options (+/-): 250, 500, 1000, 2000
   mpu.setFilterBandwidth(MPU6050_BAND_21_HZ); // options (Hz): 260, 184, 94, 44, 21, 10, 5
+
   // ----------------------------------------------------------------------------------
+  // Sensor Setup ---------------------------------------------------------------------
 
   delay(100); // Wait for sensor to stabilize
 
@@ -79,6 +97,25 @@ void setup(void) {
   compAngleX = roll;
   compAngleY = pitch;
 
+  // ----------------------------------------------------------------------------------
+  // Motor Setup ----------------------------------------------------------------------
+
+  // Set all the motor control pins to outputs
+	pinMode(enA, OUTPUT);
+	pinMode(enB, OUTPUT);
+	pinMode(in1, OUTPUT);
+	pinMode(in2, OUTPUT);
+	pinMode(in3, OUTPUT);
+	pinMode(in4, OUTPUT);
+	
+	// Turn off motors - Initial state
+	digitalWrite(in1, LOW);
+	digitalWrite(in2, LOW);
+	digitalWrite(in3, LOW);
+	digitalWrite(in4, LOW);
+
+  // ----------------------------------------------------------------------------------
+  
   timer = micros();
 }
 
@@ -131,6 +168,10 @@ void loop() {
     gyroXangle = kalAngleX;
   if (gyroYangle < -180 || gyroYangle > 180)
     gyroYangle = kalAngleY;
+
+  while(true){
+    directionControl(1); // forward
+  }
 
 
    /* Print Data */
@@ -189,3 +230,81 @@ void loop() {
   Serial.print("\r\n");
   delay(2);
 }
+
+/* MOTOR CONTROL FUNCTIONS *********************************************************
+https://lastminuteengineers.com/l293d-dc-motor-arduino-tutorial/ was a great resource
+when figuring out how to build my motor driver circuit/get it working with the controller.
+
+     IN1 |  IN2 |  Spinning Direction
+    -----------------------------------
+      0  |   0  |        OFF
+      1  |   0  |      Forward
+      0  |   1  |      Backward
+      1  |   1  |        OFF
+
+************************************************************************************/
+
+// ----------------------------------------------------------------------------------
+// Control of motor spinning direction ----------------------------------------------
+void directionControl(int dir) {
+	// Set motors to maximum speed
+	// For PWM maximum possible values are 0 to 255
+	analogWrite(enA, 255);
+	analogWrite(enB, 255);
+
+  if (dir == 1){ // FORWARD direction
+	  // (1,0) logic to both A & B
+	  digitalWrite(in1, HIGH);
+	  digitalWrite(in2, LOW);
+	  digitalWrite(in3, HIGH);
+	  digitalWrite(in4, LOW);
+	  delay(2000); }
+  else if (dir == 0){ // BACKWARD direction
+    // (0,1) logic to both A & B
+    digitalWrite(in1, LOW);
+    digitalWrite(in2, HIGH);
+    digitalWrite(in3, LOW);
+    digitalWrite(in4, HIGH);
+    delay(2000);}
+}
+// ----------------------------------------------------------------------------------
+// Control of motor speed 
+void speedControl() {
+	// Turn on motors
+	digitalWrite(in1, LOW);
+	digitalWrite(in2, HIGH);
+	digitalWrite(in3, LOW);
+	digitalWrite(in4, HIGH);
+	
+	// Accelerate from zero to maximum speed
+	for (int i = 0; i < 256; i++) {
+		analogWrite(enA, i);
+		analogWrite(enB, i);
+		delay(20);
+	}
+	
+	// Decelerate from maximum speed to zero
+	for (int i = 255; i >= 0; --i) {
+		analogWrite(enA, i);
+		analogWrite(enB, i);
+		delay(20);
+	}
+	
+	// Now turn off motors
+	digitalWrite(in1, LOW);
+	digitalWrite(in2, LOW);
+	digitalWrite(in3, LOW);
+	digitalWrite(in4, LOW);
+}
+
+// ----------------------------------------------------------------------------------
+
+// Turns motors off when called
+void motorsOff(){
+	digitalWrite(in1, LOW);
+	digitalWrite(in2, LOW);
+	digitalWrite(in3, LOW);
+	digitalWrite(in4, LOW);
+}
+
+// ----------------------------------------------------------------------------------
