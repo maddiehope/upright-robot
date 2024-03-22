@@ -20,12 +20,6 @@
 #include <Wire.h>
 #include <Kalman.h> // Source: https://github.com/TKJElectronics/KalmanFilter
 
-#include "DeviceDriverSet_xxx0.h" // for the motors
-#include "ApplicationFunctionSet_xxx0.cpp"// for the motors 
-
-DeviceDriverSet_Motor AppMotor; // Create motor instance
-Application_xxx Application_ConquerorCarxxx0;
-
 Adafruit_MPU6050 mpu; // Create the MPU6050 instance
 
 Kalman kalmanX; // Create the Kalman instances
@@ -44,8 +38,6 @@ uint32_t timer;
 
 void setup(void) {
   Serial.begin(115200); // SEE NOTE ABOVE: this is set to 115200!
-
-  AppMotor.DeviceDriverSet_Motor_Init(); // setup the motor
 
   while (!Serial)
     delay(10); // will pause everything until serial console opens
@@ -91,15 +83,6 @@ void setup(void) {
 }
 
 void loop() {
-
-  for (Application_ConquerorCarxxx0.Motion_Control = 0; Application_ConquerorCarxxx0.Motion_Control < 2; Application_ConquerorCarxxx0.Motion_Control = Application_ConquerorCarxxx0.Motion_Control + 1)
-  {
-    ApplicationFunctionSet_ConquerorCarMotionControl(
-      Application_ConquerorCarxxx0.Motion_Control /*direction*/, 
-      255 /*speed*/);
-
-    delay(2);
-  }
 
   /* Get new sensor events with the readings */
   sensors_event_t a, g, temp;
