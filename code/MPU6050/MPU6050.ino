@@ -1,20 +1,11 @@
 /********************************************************************
- * 																	*
- * 			Upright Robot with Arduino								*
- * 																	*
- * 	MPU6050 accelerometer/gyroscope combo	*			*
- * 	Uses Kalman filter for sensor fusion							*
- * 																	*
+ *                                                                  *
+ *          Upright Robot with Arduino                              *
+ *                                                                  *
+ *  MPU6050 accelerometer/gyroscope combo  *           *
+ *  Uses Kalman filter for sensor fusion                           *
+ *                                                                  *
  * ******************************************************************/
-// NOTES:
-
-// BEFORE RUNNING: Make sure you chance 0x68 to 0x72 in the Adafruit_MPU6050.h file 
-                // #define MPU6050_DEVICE_ID 0x72 -----> change it from 0x68 to 0x72
-
-// VIEWING OUTPUT: Notice that the serial is set to 115200 baud. 
-                // Make sure you set the monitor & plotter to this if you want to view!
-
-// ------------------------------------------------------------------------------------
 #include <Adafruit_MPU6050.h> 
 #include <Adafruit_Sensor.h>
 #include <Wire.h>
@@ -25,16 +16,19 @@ Adafruit_MPU6050 mpu; // Create the MPU6050 instance
 Kalman kalmanX; // Create the Kalman instances
 Kalman kalmanY;
 
+// Timers
+uint32_t timer;
+
 // Motor Pins --------------------------------------------------------------------------
 
 // Motor A connections
 int enA = 9;
-int in1 = 8;
-int in2 = 7;
+int IN1 = 8;
+int IN2 = 7;
 // Motor B connections
 int enB = 3;
-int in3 = 5;
-int in4 = 4;
+int IN3 = 5;
+int IN4 = 4;
 
 // ------------------------------------------------------------------------------------
 // Sensor Values ----------------------------------------------------------------------
@@ -42,16 +36,27 @@ int in4 = 4;
 double accX, accY, accZ;
 double gyroX, gyroY, gyroZ;
 
-double gyroXangle, gyroYangle; // Angle calculate using the gyro only
-double compAngleX, compAngleY; // Calculated angle using a complementary filter
-double kalAngleX, kalAngleY; // Calculated angle using a Kalman filter
+// ------------------------------------------------------------------------------------
+// Control Variables ------------------------------------------------------------------
+
+double desiredAngle = 0.0; // Desired angle for the robot to maintain
+double prevAngle = 0.0; // Previous angle for computing error
+double prevError = 0.0; // Previous error for computing derivative
 
 // ------------------------------------------------------------------------------------
 
-uint32_t timer;
+/****************************************************************************************
+                                       CONTROLLER
+****************************************************************************************/
 
+// Control Parameters
+double kp = 1.0;
+double kd = 1.0;
+
+/****************************************************************************************
+                                       SETUP LOOP
+****************************************************************************************/
 void setup(void) {
-
   Serial.begin(115200); // SEE NOTE ABOVE: this is set to 115200!
 
   while (!Serial)
@@ -87,39 +92,40 @@ void setup(void) {
   accY = a.acceleration.y;
   accZ = a.acceleration.z;
 
-  double roll  = atan(accY / sqrt(accX * accX + accZ * accZ)) * RAD_TO_DEG;
-  double pitch = atan2(-accX, accZ) * RAD_TO_DEG;
-
-  kalmanX.setAngle(roll); // Set starting angle
-  kalmanY.setAngle(pitch);
-  gyroXangle = roll;
-  gyroYangle = pitch;
-  compAngleX = roll;
-  compAngleY = pitch;
-
   // ----------------------------------------------------------------------------------
   // Motor Setup ----------------------------------------------------------------------
 
   // Set all the motor control pins to outputs
-	pinMode(enA, OUTPUT);
-	pinMode(enB, OUTPUT);
-	pinMode(in1, OUTPUT);
-	pinMode(in2, OUTPUT);
-	pinMode(in3, OUTPUT);
-	pinMode(in4, OUTPUT);
-	
-	// Turn off motors - Initial state
-	digitalWrite(in1, LOW);
-	digitalWrite(in2, LOW);
-	digitalWrite(in3, LOW);
-	digitalWrite(in4, LOW);
+  pinMode(enA, OUTPUT);
+  pinMode(enB, OUTPUT);
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
+  
+  // Turn off motors - Initial state
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, LOW);
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, LOW);
 
   // ----------------------------------------------------------------------------------
-  
+
   timer = micros();
 }
 
+/****************************************************************************************
+                                       MAIN LOOP
+
+Steps:
+    * read MPU6050 sensor, run Kalman filter
+    * compute corrective action
+    * scale & clamp corrective action, apply to motors
+    * Delay a defined amount to pad the loop execution time to 5ms (bigT)
+****************************************************************************************/
 void loop() {
+  float angle, velocity, turn_diff;
+  float correction, prev_corr;
 
   /* Get new sensor events with the readings */
   sensors_event_t a, g, temp;
@@ -132,76 +138,27 @@ void loop() {
   gyroX = g.gyro.x;
   gyroY = g.gyro.y;
   gyroZ = g.gyro.z;
+  
+  // Compute the error (difference between desired angle and actual angle)
+  double error = gyroY - prevAngle;
+  
+  // Compute derivative term
+  double derivative = error - prevError;
+  
+  // Compute corrective action 
+  correction = kp * error + kd * derivative;
+  
+  // Update previous error & angle for next iteration
+  prevError = error;
+  prevAngle = gyroY;
 
-  double dt = (double)(micros() - timer) / 1000000; // Calculate delta time
-  timer = micros();
-
-  double roll  = atan(accY / sqrt(accX * accX + accZ * accZ)) * RAD_TO_DEG;
-  double pitch = atan2(-accX, accZ) * RAD_TO_DEG;
-
-  double gyroXrate = gyroX / 131.0; // Convert to deg/s
-  double gyroYrate = gyroY / 131.0; // Convert to deg/s
-
-  // This fixes the transition problem when the accelerometer angle jumps between -180 and 180 degrees
-  if ((pitch < -90 && kalAngleY > 90) || (pitch > 90 && kalAngleY < -90)) {
-    kalmanY.setAngle(pitch);
-    compAngleY = pitch;
-    kalAngleY = pitch;
-    gyroYangle = pitch;
-  } else
-    kalAngleY = kalmanY.getAngle(pitch, gyroYrate, dt); // Calculate the angle using a Kalman filter
-
-  if (abs(kalAngleY) > 90)
-    gyroXrate = -gyroXrate; // Invert rate, so it fits the restriced accelerometer reading
-  kalAngleX = kalmanX.getAngle(roll, gyroXrate, dt); // Calculate the angle using a Kalman filter
-
-  gyroXangle += gyroXrate * dt; // Calculate gyro angle without any filter
-  gyroYangle += gyroYrate * dt;
-  //gyroXangle += kalmanX.getRate() * dt; // Calculate gyro angle using the unbiased rate
-  //gyroYangle += kalmanY.getRate() * dt;
-
-  compAngleX = 0.93 * (compAngleX + gyroXrate * dt) + 0.07 * roll; // Calculate the angle using a Complimentary filter
-  compAngleY = 0.93 * (compAngleY + gyroYrate * dt) + 0.07 * pitch;
-
-  // Reset the gyro angle when it has drifted too much
-  if (gyroXangle < -180 || gyroXangle > 180)
-    gyroXangle = kalAngleX;
-  if (gyroYangle < -180 || gyroYangle > 180)
-    gyroYangle = kalAngleY;
-
-  while(true){
-    directionControl(1); // forward
-  }
+  if (correction>0){
+    directionControl(1, correction);} // forward
+  else {
+    directionControl(0, correction);} // backward
 
 
-   /* Print Data */
-  #if 0 // Set to 1 to activate
-    Serial.print(accX); Serial.print("\t");
-    Serial.print(accY); Serial.print("\t");
-    Serial.print(accZ); Serial.print("\t");
-
-    Serial.print(gyroX); Serial.print("\t");
-    Serial.print(gyroY); Serial.print("\t");
-    Serial.print(gyroZ); Serial.print("\t");
-
-    Serial.print("\t");
-  #endif
-
-    Serial.print(roll); Serial.print("\t");
-    Serial.print(gyroXangle); Serial.print("\t");
-    Serial.print(compAngleX); Serial.print("\t");
-    Serial.print(kalAngleX); Serial.print("\t");
-
-    Serial.print("\t");
-
-    Serial.print(pitch); Serial.print("\t");
-    Serial.print(gyroYangle); Serial.print("\t");
-    Serial.print(compAngleY); Serial.print("\t");
-    Serial.print(kalAngleY); Serial.print("\t");
-
-  /* PRINTING SENSOR VALUES TO SERIAL MONITOR */
-  /* Uncomment for testing */
-  /*
+  /* PRINT STATEMENTS 
   //Serial.print("Acc_X: ");
   Serial.print(a.acceleration.x);
   Serial.print("\t");
@@ -224,12 +181,12 @@ void loop() {
   
   //Serial.print("Gyro_Z: ");
   Serial.println(g.gyro.z);
-  */
-
-
-  Serial.print("\r\n");
-  delay(2);
+  /**/
+  
+  delay(2); // Add delay as needed
 }
+
+// ----------------------------------------------------------------------------------
 
 /* MOTOR CONTROL FUNCTIONS *********************************************************
 https://lastminuteengineers.com/l293d-dc-motor-arduino-tutorial/ was a great resource
@@ -246,65 +203,47 @@ when figuring out how to build my motor driver circuit/get it working with the c
 
 // ----------------------------------------------------------------------------------
 // Control of motor spinning direction ----------------------------------------------
-void directionControl(int dir) {
-	// Set motors to maximum speed
+
+void directionControl(int dir, double correction) {
+
+  // Scale the correction to fit the motor control range
+  int motorSpeed = int(correction * 255); // Scale to PWM range (0 - 255)
+
+  // Clamp motor speed to avoid going beyond the valid range
+  motorSpeed = constrain(motorSpeed, 0, 255);
+  motorSpeed = motorSpeed*10; // scaling
+
+	// Set motors to speed
 	// For PWM maximum possible values are 0 to 255
-	analogWrite(enA, 255);
-	analogWrite(enB, 255);
+	analogWrite(enA, motorSpeed);
+	analogWrite(enB, motorSpeed);
+
+  Serial.println(motorSpeed);
 
   if (dir == 1){ // FORWARD direction
 	  // (1,0) logic to both A & B
-	  digitalWrite(in1, HIGH);
-	  digitalWrite(in2, LOW);
-	  digitalWrite(in3, HIGH);
-	  digitalWrite(in4, LOW);
-	  delay(2000); }
+	  digitalWrite(IN1, HIGH);
+	  digitalWrite(IN2, LOW);
+	  digitalWrite(IN3, HIGH);
+	  digitalWrite(IN4, LOW);
+	  delay(2); }
   else if (dir == 0){ // BACKWARD direction
     // (0,1) logic to both A & B
-    digitalWrite(in1, LOW);
-    digitalWrite(in2, HIGH);
-    digitalWrite(in3, LOW);
-    digitalWrite(in4, HIGH);
-    delay(2000);}
-}
-// ----------------------------------------------------------------------------------
-// Control of motor speed 
-void speedControl() {
-	// Turn on motors
-	digitalWrite(in1, LOW);
-	digitalWrite(in2, HIGH);
-	digitalWrite(in3, LOW);
-	digitalWrite(in4, HIGH);
-	
-	// Accelerate from zero to maximum speed
-	for (int i = 0; i < 256; i++) {
-		analogWrite(enA, i);
-		analogWrite(enB, i);
-		delay(20);
-	}
-	
-	// Decelerate from maximum speed to zero
-	for (int i = 255; i >= 0; --i) {
-		analogWrite(enA, i);
-		analogWrite(enB, i);
-		delay(20);
-	}
-	
-	// Now turn off motors
-	digitalWrite(in1, LOW);
-	digitalWrite(in2, LOW);
-	digitalWrite(in3, LOW);
-	digitalWrite(in4, LOW);
+    digitalWrite(IN1, LOW);
+    digitalWrite(IN2, HIGH);
+    digitalWrite(IN3, LOW);
+    digitalWrite(IN4, HIGH);
+    delay(2);}
 }
 
 // ----------------------------------------------------------------------------------
+// Turns motors off when called -----------------------------------------------------
 
-// Turns motors off when called
 void motorsOff(){
-	digitalWrite(in1, LOW);
-	digitalWrite(in2, LOW);
-	digitalWrite(in3, LOW);
-	digitalWrite(in4, LOW);
+	digitalWrite(IN1, LOW);
+	digitalWrite(IN2, LOW);
+	digitalWrite(IN3, LOW);
+	digitalWrite(IN4, LOW);
 }
 
 // ----------------------------------------------------------------------------------
